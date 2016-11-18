@@ -169,7 +169,9 @@ process(Packet = ?CONNECT_PACKET(Var), State0) ->
     %% Run hooks
     emqttd:run_hooks('client.connected', [ReturnCode1], client(State3)),
     %% Send connack
-    send(?CONNACK_PACKET(ReturnCode1, sp(SessPresent)), State3);
+    send(?CONNACK_PACKET(ReturnCode1, sp(SessPresent)), State3),
+    %% stop if authentication failure
+    stop_if_auth_failure(ReturnCode1, State3);
 
 process(Packet = ?PUBLISH_PACKET(_Qos, Topic, _PacketId, _Payload), State) ->
     case check_acl(publish, Topic, client(State)) of
@@ -273,6 +275,12 @@ trace(send, Packet, ProtoState) ->
 %% @doc redeliver PUBREL PacketId
 redeliver({?PUBREL, PacketId}, State) ->
     send(?PUBREL_PACKET(PacketId), State).
+
+stop_if_auth_failure(RC, State) when RC == ?CONNACK_CREDENTIALS; RC == ?CONNACK_AUTH ->
+    {stop, {shutdown, auth_failure}, State};
+
+stop_if_auth_failure(_RC, State) ->
+    {ok, State}.
 
 shutdown(_Error, #proto_state{client_id = undefined}) ->
     ignore;
