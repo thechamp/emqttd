@@ -325,7 +325,35 @@ send(Packet = ?PACKET(Type),
     {ok, State#proto_state{stats_data = Stats1}}.
 
 trace(recv, Packet, ProtoState) ->
-    ?LOG(info, "RECV ~s", [emqttd_packet:format(Packet)], ProtoState);
+    ?LOG(info, "RECV ~s", [emqttd_packet:format(Packet)], ProtoState),
+
+    %% Abhay Jain : This code snippet directly sends the incoming PUBLISH messages
+    %% to the PGSQL configured for the pool in this app.
+    
+    PacketHeader = Packet#mqtt_packet.header,
+    EventType = emqttd_packet:type_name(PacketHeader#mqtt_packet_header.type),
+
+    if
+        EventType == 'PUBLISH' ->
+            PVariable = Packet#mqtt_packet.variable,
+
+            HostInfo = esockd_net:format(ProtoState#proto_state.peername),
+            IPPort = lists:nth(1, HostInfo) ++ ":" ++ lists:nth(3, HostInfo),
+
+            Query = "INSERT INTO mqtt_publish (client_id, ip_port, username, topic, payload, qos, retain) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+
+            Params = [ProtoState#proto_state.client_id,
+                      IPPort,
+                      ProtoState#proto_state.username,
+                      PVariable#mqtt_packet_publish.topic_name,
+                      Packet#mqtt_packet.payload,
+                      i(PacketHeader#mqtt_packet_header.qos),
+                      i(PacketHeader#mqtt_packet_header.retain)],
+
+            epgsql_poolboy:equery(primary, Query, Params);
+        true ->
+            ok
+    end;
 
 trace(send, Packet, ProtoState) ->
     ?LOG(info, "SEND ~s", [emqttd_packet:format(Packet)], ProtoState).
@@ -513,3 +541,7 @@ check_acl(subscribe, Topic, Client) ->
 
 sp(true)  -> 1;
 sp(false) -> 0.
+
+i(true)  -> "1";
+i(false) -> "0";
+i(I) when is_integer(I) -> integer_to_list(I).
